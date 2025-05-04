@@ -1,0 +1,11 @@
+
+{
+    "name": "iot-dashboard",
+    "version": "1.0.0",
+    "scripts": {
+      "build": "echo 'No build necessary for static files!'"
+    },
+    "dependencies": {},
+    "devDependencies": {}
+  }
+  

@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sensor Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Bootstrap -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body {
+      background-color: #f8f9fa;
+    }
+    .card {
+      box-shadow: 0 4px 8px rgba(0,0,0,0.05);
+      border: none;
+    }
+    .status-on {
+      color: green;
+      font-weight: bold;
+    }
+    .status-off {
+      color: red;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+<div class="container py-5">
+  <h2 class="mb-4 text-center">📡 IoT Sensor Dashboard</h2>
+
+  <div class="row g-4">
+    <div class="col-md-4">
+      <div class="card p-4 text-center">
+        <h5 class="card-title">Filter Data</h5>
+        <select class="form-select" id="filterSelect" onchange="updateData()">
+          <option value="24h">Last 24 Hours</option>
+          <option value="all">All Time</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card p-4 text-center">
+        <h5 class="card-title">Sensor Control</h5>
+        <p>Status: <span id="status" class="status-off">Loading...</span></p>
+        <button class="btn btn-primary" onclick="toggleSensorControl()">Toggle Sensor</button>
+      </div>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card p-4 text-center">
+        <h5 class="card-title">Distance</h5>
+        <p class="display-6" id="distance">-- cm</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="row mt-4">
+    <div class="col">
+      <div class="card p-4 text-center">
+        <h5 class="card-title">Last Updated</h5>
+        <p id="timestamp">--</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Data Table with Pagination -->
+  <div class="row mt-4" id="dataTableContainer">
+    <div class="col">
+      <div class="card p-4">
+        <h5 class="card-title text-center">Sensor Data</h5>
+        <table class="table table-bordered table-striped">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Distance (cm)</th>
+              <th>Buzzer Status</th>
+            </tr>
+          </thead>
+          <tbody id="dataTableBody"></tbody>
+        </table>
+        <div class="text-center">
+          <button class="btn btn-outline-primary btn-sm me-2" onclick="prevPage()">Previous</button>
+          <button class="btn btn-outline-primary btn-sm" onclick="nextPage()">Next</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Graphs -->
+  <div class="row mt-4">
+    <div class="col">
+      <div class="card p-4">
+        <h5 class="card-title text-center">📈 Distance Over Time</h5>
+        <canvas id="distanceChart" height="100"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="row mt-4">
+    <div class="col">
+      <div class="card p-4">
+        <h5 class="card-title text-center">🔔 Buzzer Status Summary</h5>
+        <canvas id="buzzerChart" height="100"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="row mt-4">
+    <div class="col">
+      <div class="card p-4">
+        <h5 class="card-title text-center">🧮 Buzzer Status Ratio</h5>
+        <canvas id="buzzerPieChart" height="100"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="row mt-4">
+    <div class="col">
+      <div class="card p-4">
+        <h5 class="card-title text-center">📊 Hourly Average Distance (Last 24h)</h5>
+        <canvas id="hourlyDistanceChart" height="100"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const firebaseConfig = {
+    apiKey: "AIzaSyC95JvTPm1yLZfHzW79JamN3NEJqUjL30g",
+    authDomain: "object-detect-c3374.firebaseapp.com",
+    databaseURL: "https://object-detect-c3374-default-rtdb.firebaseio.com",
+    projectId: "object-detect-c3374",
+    storageBucket: "object-detect-c3374.appspot.com",
+    messagingSenderId: "351101370129",
+    appId: "1:351101370129:web:129035af3aea65aebe96b0",
+    measurementId: "G-6M7C4R09B2"
+  };
+
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+  const controlRef = db.ref("sensor_control");
+  const dataRef = db.ref("object_detection");
+
+  function toggleSensorControl() {
+    controlRef.once("value").then(snapshot => {
+      const current = snapshot.val();
+      controlRef.set(current === 1 ? 0 : 1);
+    });
+  }
+
+  controlRef.on("value", snapshot => {
+    const status = snapshot.val();
+    const statusEl = document.getElementById("status");
+    statusEl.innerText = status === 1 ? "ON" : "OFF";
+    statusEl.className = status === 1 ? "status-on" : "status-off";
+  });
+
+  let chart, buzzerChart, buzzerPieChart, hourlyDistanceChart;
+  const distanceCtx = document.getElementById("distanceChart").getContext("2d");
+  const buzzerCtx = document.getElementById("buzzerChart").getContext("2d");
+  const buzzerPieCtx = document.getElementById("buzzerPieChart").getContext("2d");
+  const hourlyDistanceCtx = document.getElementById("hourlyDistanceChart").getContext("2d");
+
+  function renderChart(labels, dataPoints) {
+    if (chart) chart.destroy();
+    chart = new Chart(distanceCtx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          label: "Distance (cm)",
+          data: dataPoints,
+          borderColor: "#0d6efd",
+          tension: 0.2,
+          pointBackgroundColor: "#0d6efd"
+        }]
+      }
+    });
+  }
+
+  function renderBuzzerChart(onCount, offCount) {
+    if (buzzerChart) buzzerChart.destroy();
+    buzzerChart = new Chart(buzzerCtx, {
+      type: "bar",
+      data: {
+        labels: ["ON 🔔", "OFF"],
+        datasets: [{
+          label: "Buzzer Status",
+          data: [onCount, offCount],
+          backgroundColor: ["#198754", "#dc3545"]
+        }]
+      }
+    });
+  }
+
+  function renderBuzzerPieChart(onCount, offCount) {
+    if (buzzerPieChart) buzzerPieChart.destroy();
+    buzzerPieChart = new Chart(buzzerPieCtx, {
+      type: "pie",
+      data: {
+        labels: ["ON 🔔", "OFF"],
+        datasets: [{
+          data: [onCount, offCount],
+          backgroundColor: ["#28a745", "#dc3545"]
+        }]
+      }
+    });
+  }
+
+  function renderHourlyDistanceChart(hourLabels, avgDistance) {
+    if (hourlyDistanceChart) hourlyDistanceChart.destroy();
+    hourlyDistanceChart = new Chart(hourlyDistanceCtx, {
+      type: "bar",
+      data: {
+        labels: hourLabels,
+        datasets: [{
+          label: "Average Distance (cm)",
+          data: avgDistance,
+          backgroundColor: "#0d6efd"
+        }]
+      }
+    });
+  }
+
+  let allData = [], currentPage = 1, rowsPerPage = 5;
+
+  function displayPage(page) {
+    const tbody = document.getElementById("dataTableBody");
+    tbody.innerHTML = "";
+
+    const start = (page - 1) * rowsPerPage;
+    const paginatedItems = allData.slice(start, start + rowsPerPage);
+
+    for (const data of paginatedItems) {
+      const row = `<tr>
+        <td>${new Date(data.timestamp).toLocaleString()}</td>
+        <td>${data.distance} cm</td>
+        <td>${data.buzzer_status === 1 ? "ON 🔔" : "OFF"}</td>
+      </tr>`;
+      tbody.innerHTML += row;
+    }
+  }
+
+  function prevPage() {
+    if (currentPage > 1) {
+      currentPage--;
+      displayPage(currentPage);
+    }
+  }
+
+  function nextPage() {
+    if (currentPage * rowsPerPage < allData.length) {
+      currentPage++;
+      displayPage(currentPage);
+    }
+  }
+
+  function updateData() {
+    const filterValue = document.getElementById("filterSelect").value;
+    const now = Date.now();
+    allData = [];
+
+    const labels = [], dataPoints = [];
+    let buzzerOn = 0, buzzerOff = 0;
+    let hourlyData = Array(24).fill(0);
+    let hourlyCount = Array(24).fill(0);
+
+    dataRef.orderByChild("timestamp").once("value", snapshot => {
+      snapshot.forEach(child => {
+        const data = child.val();
+        const ts = data.timestamp;
+
+        if (filterValue === "all" || now - ts < 24 * 60 * 60 * 1000) {
+          allData.unshift(data); // latest first
+          labels.unshift(new Date(ts).toLocaleTimeString());
+          dataPoints.unshift(data.distance);
+          if (data.buzzer_status === 1) buzzerOn++;
+          else buzzerOff++;
+
+          const hour = new Date(ts).getHours();
+          hourlyData[hour] += data.distance;  
+          hourlyCount[hour]++;
+        }
+      });
+
+      currentPage = 1;
+      displayPage(currentPage);
+      renderChart(labels, dataPoints);
+      renderBuzzerChart(buzzerOn, buzzerOff);
+      renderBuzzerPieChart(buzzerOn, buzzerOff);
+
+      const hourLabels = [];
+      const avgDistance = [];
+      for (let i = 0; i < 24; i++) {
+        if (hourlyCount[i] > 0) {
+          avgDistance.push(hourlyData[i] / hourlyCount[i]);
+          hourLabels.push(i + ":00");
+        }
+      }
+
+      renderHourlyDistanceChart(hourLabels, avgDistance);
+    });
+  }
+
+  dataRef.limitToLast(1).on("child_added", snapshot => {
+    const data = snapshot.val();
+    document.getElementById("distance").innerText = data.distance + " cm";
+    document.getElementById("timestamp").innerText = new Date(data.timestamp).toLocaleString();
+  });
+
+  updateData(); // Initial data load
+</script>
+
+</body>
+</html>
